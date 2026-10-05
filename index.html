@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>BREAK SHOT</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#08111e;color:white;font-family:system-ui,-apple-system,"Noto Sans JP",sans-serif;touch-action:none}
+#game{position:relative;width:100%;height:100%;background:linear-gradient(#153b62 0 55%,#202936 55%);overflow:hidden;cursor:crosshair}
+.screen{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:24px;background:radial-gradient(circle at 50% 35%,#214d73,#07111d 70%);z-index:30}
+.hidden{display:none!important}
+h1{font-size:clamp(44px,11vw,92px);margin:0;letter-spacing:.05em;text-shadow:0 5px 0 #0b0d13,0 0 30px #57c8ff}
+.sub{font-size:clamp(16px,4vw,25px);opacity:.9;margin:12px 0 30px}
+button{border:0;border-radius:18px;padding:17px 32px;font-weight:900;font-size:22px;background:#ffd32a;color:#10131a;box-shadow:0 7px 0 #9a7200;cursor:pointer}
+button:active{transform:translateY(4px);box-shadow:0 3px 0 #9a7200}
+#hud{position:absolute;top:0;left:0;right:0;z-index:10;display:flex;justify-content:space-between;gap:8px;padding:10px 12px;background:linear-gradient(#07101dd9,transparent);font-weight:900;text-shadow:0 2px 3px #000;font-size:clamp(15px,4vw,24px);pointer-events:none}
+#timer{color:#ffd32a}
+#combo{color:#7effa2}
+#arena{position:absolute;inset:0}
+.target{position:absolute;display:flex;align-items:center;justify-content:center;user-select:none;filter:drop-shadow(0 7px 5px #0008);animation:pop .15s ease-out}
+.target .emoji{font-size:clamp(45px,10vw,85px);pointer-events:none}
+.target.gold .emoji{filter:drop-shadow(0 0 12px gold)}
+.target.moving{animation:pop .15s ease-out, bob .8s ease-in-out infinite alternate}
+@keyframes pop{from{transform:scale(.25)}to{transform:scale(1)}}
+@keyframes bob{to{translate:0 -12px}}
+.hit{position:absolute;z-index:20;font-size:30px;font-weight:1000;pointer-events:none;animation:scoreFly .65s forwards;text-shadow:0 3px 2px #000}
+@keyframes scoreFly{0%{opacity:1;transform:translate(-50%,-50%) scale(.7)}100%{opacity:0;transform:translate(-50%,-120px) scale(1.4)}}
+.burst{position:absolute;z-index:19;pointer-events:none;font-size:55px;animation:burst .35s forwards}
+@keyframes burst{to{opacity:0;transform:scale(2.2) rotate(25deg)}}
+#stageBanner{position:absolute;inset:0;z-index:25;display:flex;align-items:center;justify-content:center;font-size:clamp(34px,10vw,76px);font-weight:1000;text-align:center;background:#06101bd9;text-shadow:0 4px #000;pointer-events:none}
+#results .scoreBig{font-size:clamp(52px,14vw,105px);font-weight:1000;color:#ffd32a}
+#results table{border-collapse:collapse;margin:15px auto 25px;font-size:20px}
+#results td{padding:6px 18px;border-bottom:1px solid #ffffff35}
+#rank{font-size:42px;font-weight:1000;margin:8px}
+.tip{font-size:14px;opacity:.65;margin-top:24px;max-width:620px}
+</style>
+</head>
+<body>
+<div id="game">
+  <div id="hud" class="hidden">
+    <div id="stageText">STAGE 1</div>
+    <div id="scoreText">SCORE 0</div>
+    <div id="combo"></div>
+    <div id="timer">60.0</div>
+  </div>
+  <div id="arena"></div>
+  <div id="stageBanner" class="hidden"></div>
+
+  <div id="title" class="screen">
+    <h1>BREAK SHOT</h1>
+    <div class="sub">1分 × 3ステージ　破壊スコアアタック 💥</div>
+    <button id="startBtn">GAME START</button>
+    <div class="tip">画面のターゲットをタップ／クリックして破壊！<br>小さい的・動く的・金色ターゲットほど高得点。連続命中でCOMBOボーナス。</div>
+  </div>
+
+  <div id="results" class="screen hidden">
+    <h1>RESULT</h1>
+    <div class="scoreBig" id="totalScore">0</div>
+    <div id="rank">RANK C</div>
+    <table id="scoreTable"></table>
+    <button id="retryBtn">もう一度</button>
+  </div>
+</div>
+<script>
+const $=s=>document.querySelector(s);
+const arena=$("#arena"), hud=$("#hud"), banner=$("#stageBanner");
+const stageText=$("#stageText"), scoreText=$("#scoreText"), timerEl=$("#timer"), comboEl=$("#combo");
+let score=0, stage=0, combo=0, lastHit=0, running=false, endAt=0, spawnTimer=null, raf=null, stageScores=[];
+const stages=[
+ {name:"CITY BREAK", bg:"linear-gradient(#53a8df 0 54%,#586879 54%)", icons:["🎈","🪧","📦","🚧","🛢️"], rate:620},
+ {name:"WAREHOUSE", bg:"linear-gradient(#17253a 0 55%,#4c3e32 55%)", icons:["📦","🛢️","💡","🧰","🎯"], rate:520},
+ {name:"FESTIVAL", bg:"linear-gradient(#351d57 0 56%,#65332f 56%)", icons:["🏮","🎈","🎯","👾","⭐"], rate:430}
+];
+function beep(freq=180,dur=.05,type="square"){
+ try{let ac=window._ac||(window._ac=new (AudioContext||webkitAudioContext)()),o=ac.createOscillator(),g=ac.createGain();
+ o.type=type;o.frequency.value=freq;g.gain.value=.035;o.connect(g);g.connect(ac.destination);o.start();g.gain.exponentialRampToValueAtTime(.001,ac.currentTime+dur);o.stop(ac.currentTime+dur)}catch(e){}
+}
+function clearArena(){arena.innerHTML=""}
+function showBanner(text,ms=1200){banner.innerHTML=text;banner.classList.remove("hidden");setTimeout(()=>banner.classList.add("hidden"),ms)}
+function startGame(){
+ $("#title").classList.add("hidden");$("#results").classList.add("hidden");hud.classList.remove("hidden");
+ score=0;stageScores=[];stage=0;scoreText.textContent="SCORE 0";startStage();
+}
+function startStage(){
+ running=false;clearInterval(spawnTimer);clearArena();combo=0;comboEl.textContent="";
+ const s=stages[stage];$("#game").style.background=s.bg;stageText.textContent=`STAGE ${stage+1} / 3`;
+ showBanner(`STAGE ${stage+1}<br><small>${s.name}</small>`,1400);
+ setTimeout(()=>{running=true;endAt=performance.now()+60000;spawnTimer=setInterval(spawnTarget,s.rate);for(let i=0;i<4;i++)spawnTarget();tick()},1450);
+}
+function spawnTarget(){
+ if(!running)return;
+ const s=stages[stage], el=document.createElement("div");el.className="target";
+ const r=Math.random(), gold=r<.07, moving=r>.55;
+ if(gold)el.classList.add("gold"); if(moving)el.classList.add("moving");
+ const small=Math.random()<.28, size=small?58:82;
+ el.style.width=size+"px";el.style.height=size+"px";
+ el.style.left=Math.max(5,Math.random()*(innerWidth-size-10))+"px";
+ el.style.top=(70+Math.random()*(innerHeight-size-100))+"px";
+ const icon=gold?"🏆":s.icons[Math.floor(Math.random()*s.icons.length)];
+ el.innerHTML=`<span class="emoji">${icon}</span>`;
+ const base=gold?1000:(small?300:(moving?500:100));el.dataset.points=base;
+ el.addEventListener("pointerdown",hitTarget);
+ arena.appendChild(el);
+ setTimeout(()=>{if(el.isConnected)el.remove()},gold?1050:(moving?1500:1900));
+}
+function hitTarget(e){
+ if(!running)return;e.stopPropagation();
+ const now=performance.now();combo=(now-lastHit<850)?combo+1:1;lastHit=now;
+ let pts=+this.dataset.points;let mult=Math.min(5,1+Math.floor((combo-1)/5));pts*=mult;score+=pts;
+ scoreText.textContent=`SCORE ${score.toLocaleString()}`;comboEl.textContent=combo>=2?`${combo} COMBO ×${mult}`:"";
+ const h=document.createElement("div");h.className="hit";h.style.left=e.clientX+"px";h.style.top=e.clientY+"px";h.textContent="+"+pts;arena.appendChild(h);
+ const b=document.createElement("div");b.className="burst";b.style.left=(e.clientX-25)+"px";b.style.top=(e.clientY-30)+"px";b.textContent="💥";arena.appendChild(b);
+ setTimeout(()=>{h.remove();b.remove()},700);this.remove();beep(150+Math.min(700,combo*30),.06);
+}
+arena.addEventListener("pointerdown",e=>{if(running){combo=0;comboEl.textContent="MISS";beep(80,.06,"sawtooth");setTimeout(()=>{if(combo===0)comboEl.textContent=""},300)}});
+function tick(){
+ if(!running)return;let left=Math.max(0,endAt-performance.now());timerEl.textContent=(left/1000).toFixed(1);
+ if(left<=0){finishStage();return}raf=requestAnimationFrame(tick);
+}
+function finishStage(){
+ running=false;clearInterval(spawnTimer);cancelAnimationFrame(raf);clearArena();
+ const prev=stageScores.reduce((a,b)=>a+b,0);stageScores.push(score-prev);beep(600,.2);
+ if(stage<2){showBanner(`TIME!<br><small>STAGE SCORE ${stageScores[stage].toLocaleString()}</small>`,1700);stage++;setTimeout(startStage,1800)}
+ else{showBanner("FINISH!",1400);setTimeout(showResults,1500)}
+}
+function showResults(){
+ hud.classList.add("hidden");$("#results").classList.remove("hidden");$("#totalScore").textContent=score.toLocaleString();
+ let rank=score>=120000?"S":score>=80000?"A":score>=50000?"B":"C";$("#rank").textContent=`RANK ${rank}`;
+ $("#scoreTable").innerHTML=stageScores.map((v,i)=>`<tr><td>STAGE ${i+1}</td><td>${v.toLocaleString()}</td></tr>`).join("");
+}
+$("#startBtn").onclick=startGame;$("#retryBtn").onclick=startGame;
+</script>
+</body>
+</html>
